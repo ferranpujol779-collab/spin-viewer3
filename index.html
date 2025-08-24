@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Visor 360° Spin (arrastre y flechas)</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --panel:#0f1620; --text:#e6edf3; --muted:#94a3b8; --accent:#38bdf8; --border:#1f2937;
+    }
+    *{box-sizing:border-box}
+    body{margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:radial-gradient(1200px 600px at 60% -10%, #0f1720, var(--bg)); color:var(--text);}
+    header{position:sticky; top:0; z-index:10; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; background:linear-gradient(180deg,#0f1720,#0b0f14); border-bottom:1px solid var(--border)}
+    header h1{font-size:16px; margin:0}
+    header .hint{color:var(--muted); font-size:13px}
+    main{padding:16px; display:grid; gap:16px; grid-template-columns: 360px 1fr}
+    @media (max-width: 900px){ main{grid-template-columns:1fr} }
+    .card{background:linear-gradient(180deg,#0f1620,#0e141b); border:1px solid var(--border); border-radius:16px; overflow:hidden; box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .card .head{padding:14px 16px; border-bottom:1px solid var(--border); font-weight:600}
+    .card .body{padding:16px}
+    .viewer-wrap{display:grid; place-items:center; min-height:60vh; border:1px dashed #223046; border-radius:16px; background:radial-gradient(800px 300px at 50% 0%, #101826, #0b0f14)}
+    .viewer{width: min(92vw, 900px); aspect-ratio: 16/9; user-select:none; touch-action: none; display:block; border-radius:12px; box-shadow:0 20px 60px rgba(0,0,0,.35); background:#0a0f16}
+    .toolbar{display:flex; gap:8px; flex-wrap:wrap}
+    .toolbar button{background:#0f1a26; border:1px solid var(--border); color:var(--text); padding:8px 12px; border-radius:12px; cursor:pointer}
+    .toolbar button:hover{border-color:#2b394d}
+    .muted{color:var(--muted); font-size:13px}
+    code{background:#0f1a26; padding:2px 6px; border-radius:6px; border:1px solid var(--border)}
+    .kbd{border:1px solid var(--border); background:#0f1a26; padding:2px 6px; border-radius:6px}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Visor 360° Spin</h1>
+    <div class="hint">Arrastra ←→ o usa flechas del teclado. Doble clic/tap = reproducir/pausar auto-rotación.</div>
+  </header>
+
+  <main>
+    <section class="card">
+      <div class="head">Ajustes rápidos</div>
+      <div class="body">
+        <div class="toolbar">
+          <label>Carpeta: <code id="folderLabel">frames_spin</code></label>
+          <label>Nº imágenes: <input id="countInput" type="number" min="8" max="400" value="36" style="width:80px"></label>
+          <label>Sensibilidad: <input id="sensInput" type="range" min="1" max="100" value="40"></label>
+          <button id="prevBtn">◀︎</button>
+          <button id="nextBtn">▶︎</button>
+          <button id="playBtn">⏵ Auto</button>
+          <button id="resetBtn">⟲ Reset</button>
+        </div>
+        <p class="muted" style="margin-top:8px">
+          Pon tus archivos como <code>frames_spin/frame001.jpg</code> … <code>frame036.jpg</code> (mismo directorio que este HTML).
+        </p>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="head">Visor</div>
+      <div class="body viewer-wrap">
+        <img id="viewer" class="viewer" alt="spin viewer" draggable="false" />
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="head">Notas</div>
+      <div class="body">
+        <ul>
+          <li>Coloca esta página <code>spin_viewer.html</code> junto a la carpeta <code>frames_spin/</code>.</li>
+          <li>Las imágenes deben seguir el patrón <code>frame001.jpg</code>, <code>frame002.jpg</code>, …</li>
+          <li>Teclas: <span class="kbd">←</span> / <span class="kbd">→</span> para girar, <span class="kbd">Espacio</span> para reproducir/pausar.</li>
+          <li>Soporta ratón y táctil (arrastre). Doble clic/tap activa auto-rotación.</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <script>
+  (function(){
+    const img = document.getElementById('viewer');
+    const countInput = document.getElementById('countInput');
+    const sensInput  = document.getElementById('sensInput');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const playBtn = document.getElementById('playBtn');
+    const resetBtn= document.getElementById('resetBtn');
+    const folderLabel = document.getElementById('folderLabel');
+
+    const cfg = {
+      folder: 'frames_spin',
+      total: parseInt(countInput.value, 10) || 36,
+      index: 1,
+      dragging: false,
+      startX: 0,
+      lastX: 0,
+      velocityX: 0,
+      sensitivity: parseInt(sensInput.value, 10) || 40,
+      autorun: false,
+      rafId: null,
+      preloaded: new Set(),
+    };
+
+    folderLabel.textContent = cfg.folder;
+
+    function srcFor(i){
+      const s = String(i).padStart(3, '0');
+      return `${cfg.folder}/frame${s}.jpg`;
+    }
+
+    function setImage(i){
+      if(i < 1) i = cfg.total + ((i-1) % cfg.total) + 1;
+      if(i > cfg.total) i = ((i-1) % cfg.total) + 1;
+      cfg.index = i;
+      img.src = srcFor(cfg.index);
+      // Preload vecinos
+      const n1 = ((i) % cfg.total) + 1;
+      const p1 = ((i-2+cfg.total) % cfg.total) + 1;
+      [n1, p1].forEach(n=>{
+        if(!cfg.preloaded.has(n)){
+          const im = new Image();
+          im.src = srcFor(n);
+          cfg.preloaded.add(n);
+        }
+      });
+    }
+
+    function step(dir){
+      setImage(cfg.index + dir);
+    }
+
+    function startDrag(x){
+      cfg.dragging = true;
+      cfg.startX = x;
+      cfg.lastX = x;
+      cfg.velocityX = 0;
+    }
+    function moveDrag(x){
+      if(!cfg.dragging) return;
+      const dx = x - cfg.lastX;
+      cfg.lastX = x;
+      cfg.velocityX = dx;
+      const stepSize = Math.max(1, Math.round(Math.abs(dx) / Math.max(1, (100 - cfg.sensitivity + 1))));
+      if(dx > 0) for(let k=0;k<stepSize;k++) step(-1);
+      else if(dx < 0) for(let k=0;k<stepSize;k++) step(1);
+    }
+    function endDrag(){
+      cfg.dragging = false;
+    }
+
+    // Eventos ratón
+    img.addEventListener('mousedown', e=>{ e.preventDefault(); startDrag(e.clientX); });
+    window.addEventListener('mousemove', e=> moveDrag(e.clientX), {passive:true});
+    window.addEventListener('mouseup', endDrag);
+
+    // Táctil
+    img.addEventListener('touchstart', e=>{ if(e.touches[0]) startDrag(e.touches[0].clientX); }, {passive:true});
+    window.addEventListener('touchmove', e=>{ if(e.touches[0]) moveDrag(e.touches[0].clientX); }, {passive:true});
+    window.addEventListener('touchend', endDrag);
+
+    // Teclado
+    window.addEventListener('keydown', e=>{
+      if(e.key === 'ArrowRight') step(1);
+      if(e.key === 'ArrowLeft') step(-1);
+      if(e.key === ' ') { e.preventDefault(); toggleAuto(); }
+    });
+
+    // Botones
+    prevBtn.addEventListener('click', ()=> step(-1));
+    nextBtn.addEventListener('click', ()=> step(1));
+    resetBtn.addEventListener('click', ()=>{ cfg.index = 1; setImage(1); });
+    playBtn.addEventListener('click', ()=> toggleAuto());
+
+    // Sensibilidad / total
+    sensInput.addEventListener('input', ()=> cfg.sensitivity = parseInt(sensInput.value,10)||40);
+    countInput.addEventListener('change', ()=>{
+      cfg.total = Math.max(8, Math.min(400, parseInt(countInput.value,10) || 36));
+      setImage( (cfg.index-1) % cfg.total + 1 );
+    });
+
+    // Doble click/tap -> auto-rotación
+    let lastTap = 0;
+    img.addEventListener('dblclick', toggleAuto);
+    img.addEventListener('touchend', e=>{
+      const now = Date.now();
+      if(now - lastTap < 350) toggleAuto();
+      lastTap = now;
+    });
+
+    function toggleAuto(){
+      cfg.autorun = !cfg.autorun;
+      playBtn.textContent = cfg.autorun ? '⏸ Pausa' : '⏵ Auto';
+      if(cfg.autorun && !cfg.rafId) loop();
+      if(!cfg.autorun && cfg.rafId){ cancelAnimationFrame(cfg.rafId); cfg.rafId = null; }
+    }
+
+    function loop(){
+      if(cfg.autorun){
+        step(1);
+        cfg.rafId = requestAnimationFrame(loop);
+      }
+    }
+
+    // Inicial
+    setImage(1);
+  })();
+  </script>
+</body>
+</html>
